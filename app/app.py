@@ -1,5 +1,4 @@
 from typing import Annotated
-import requests
 
 from fastapi import (
     FastAPI,
@@ -16,9 +15,8 @@ from tortoise.exceptions import IntegrityError
 
 from app.models import User
 from app.schemas import UserAuth, UserUpdate
-from database import TORTOISE_ORM
-
 from config import settings
+from database import TORTOISE_ORM
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -39,11 +37,15 @@ def user_schema_from_tortoise(user: User) -> UserUpdate:
         team = None
     else:
         team = user.team.name
+    roles = []
+    for role in user.roles:
+        roles.append(role)
     return UserUpdate(
         login=user.login,
         id=user.id,
         photo=user.photo,
-        role=user.role,
+        name=user.name,
+        roles=roles,
         team=team,
         cv=user.cv,
         academic_group=user.academic_group,
@@ -72,7 +74,7 @@ async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> UserUp
     user = await User.get_or_none(login=login)
     if user is None:
         raise credentials_exception
-    await user.fetch_related("team")
+    await user.fetch_related("team", "roles")
     return user_schema_from_tortoise(user)
 
 
@@ -107,6 +109,19 @@ async def create_user(user: UserAuth):
 @app.get('/user_profile', response_model=UserUpdate)
 async def get_user(user: Annotated[UserUpdate, Depends(get_current_user)]):
     return user
+
+
+@app.get('/user_groups', response_model=None)
+async def get_user_groups(user: Annotated[UserUpdate, Depends(get_current_user)]):
+    db_user = await User.get(id=user.id)
+    await db_user.fetch_related('groups')
+    groups = []
+    for group in db_user.groups:
+        await group.fetch_related('members')
+        new_group = dict()
+        new_group['members'] = []
+        for member in group.members:
+            pass
 
 
 register_tortoise(

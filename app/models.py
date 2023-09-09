@@ -5,10 +5,10 @@ from tortoise import fields
 class User(Model):
     id = fields.BigIntField(pk=True)
     student_email = fields.CharField(max_length=32, null=True, unique=True)
+    name = fields.CharField(max_length=32, null=True)
     login = fields.CharField(max_length=64, unique=True)
     hashed_password = fields.CharField(max_length=64)
     photo = fields.CharField(max_length=128, null=True)
-    role = fields.CharField(max_length=32, null=True)
     team = fields.ForeignKeyField(
         model_name="models.Team",
         related_name="members",
@@ -17,6 +17,7 @@ class User(Model):
     )
     cv = fields.TextField(null=True)
     academic_group = fields.CharField(max_length=32, null=True)
+    roles = fields.ManyToManyField(model_name="models.Role")
 
     def __str__(self):
         return self.login
@@ -53,4 +54,6 @@ class Group(Model):
     members = fields.ManyToManyField(model_name="models.User", related_name="groups")
 
 
-
+class Role(Model):
+    id = fields.IntField(pk=True)
+    name = fields.CharField(max_length=32, unique=True)
