@@ -4,7 +4,7 @@ from pydantic import BaseModel
 class UserAuth(BaseModel):
     login: str
     password: str | int
-    email: str = "bullshit"
+    # email: str = "bullshit"
 
 
 class UserUpdate(BaseModel):
@@ -15,3 +15,4 @@ class UserUpdate(BaseModel):
     team_id: int | None = None
     cv: str | None = None
     academic_group: str | None = None
+    student_email: str | None = None

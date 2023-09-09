@@ -27,12 +27,28 @@ app = FastAPI()
 
 async def authenticate_user(login: str, password: str) -> User | None:
     user = await User.get_or_none(login=login)
-    print(user.hashed_password, password)
     if not user:
         return None
     if not pwd_context.verify(password, user.hashed_password):
         return None
     return user
+
+
+def user_schema_from_tortoise(user: User) -> UserUpdate:
+    if user.team is None:
+        team = None
+    else:
+        team = user.team.name
+    return UserUpdate(
+        login=user.login,
+        id=user.id,
+        photo=user.photo,
+        role=user.role,
+        team=team,
+        cv=user.cv,
+        academic_group=user.academic_group,
+        student_email=user.student_email
+    )
 
 
 def create_access_token(data: dict):
@@ -41,7 +57,7 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 
-async def get_current_user(jwt_token: Annotated[str | None, Cookie()]):
+async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> UserUpdate:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -56,7 +72,8 @@ async def get_current_user(jwt_token: Annotated[str | None, Cookie()]):
     user = await User.get_or_none(login=login)
     if user is None:
         raise credentials_exception
-    return UserUpdate(login=user.login, id=user.id)
+    await user.fetch_related("team")
+    return user_schema_from_tortoise(user)
 
 
 @app.post("/login", response_model=UserUpdate)
@@ -76,9 +93,6 @@ async def login_for_access_token(user: UserAuth, response: Response):
 @app.post('/register', response_model=UserUpdate)
 async def create_user(user: UserAuth):
     hashed_password = pwd_context.hash(user.password)
-    new_user = UserAuth(login=user.login, password=int(user.password))
-    ans = requests.post('http://10.54.72.220:8080/api_db/registration', data=new_user.model_dump())
-    print(ans.text)
     new_user = User(login=user.login, hashed_password=hashed_password)
     try:
         await new_user.save()
@@ -88,6 +102,11 @@ async def create_user(user: UserAuth):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User already exists"
         )
+
+
+@app.get('/user_profile', response_model=UserUpdate)
+async def get_user(user: Annotated[UserUpdate, Depends(get_current_user)]):
+    return user
 
 
 register_tortoise(
