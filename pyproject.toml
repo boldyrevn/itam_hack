@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "itam-hack"
+version = "0.1.0"
+description = ""
+authors = ["boldyrevn <boldyrev.now@mail.ru>"]
+readme = "README.md"
+packages = [{include = "itam_hack"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.103.1"
+uvicorn = "^0.23.2"
+tortoise-orm = {extras = ["asyncpg"], version = "^0.20.0"}
+aerich = "^0.7.2"
+pydantic-settings = "^2.0.3"
+python-dotenv = "^1.0.0"
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+aiohttp = "^3.8.5"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+requests = "^2.31.0"
+
+[tool.aerich]
+tortoise_orm = "database.TORTOISE_ORM"
+location = "./migrations"
+src_folder = "./."
