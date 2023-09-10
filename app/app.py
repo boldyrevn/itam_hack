@@ -1,50 +1,29 @@
 from typing import Annotated
 
-import tortoise
 from fastapi import FastAPI, HTTPException, status, Response, Depends, Cookie
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from tortoise.contrib.fastapi import register_tortoise
-from tortoise.exceptions import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.tortoise_models import User, Team
-from app.schemas import UserAuth, UserUpdate, GroupSchema, CreateTeam
+from app import crud
+from app.models import User
+from app.schemas import UserAuth, UserShow, CreateTeam, UserUpdate, JoinTeam, TeamShow
+from app.utils import user_schema_from_orm
 from config import settings
-from old_database import TORTOISE_ORM
+from database import get_db
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI()
 
 
-async def authenticate_user(login: str, password: str) -> User | None:
-    user = await User.get_or_none(login=login)
+async def authenticate_user(login: str, password: str, db: Session) -> User | None:
+    user = crud.get_user(login, db)
     if not user:
         return None
     if not pwd_context.verify(password, user.hashed_password):
         return None
     return user
-
-
-def user_schema_from_tortoise(user: User) -> UserUpdate:
-    if user.team is None:
-        team = None
-    else:
-        team = user.team.name
-    roles = []
-    for role in user.roles:
-        roles.append(role)
-    return UserUpdate(
-        login=user.login,
-        id=user.id,
-        photo=user.photo,
-        name=user.name,
-        roles=roles,
-        team=team,
-        cv=user.cv,
-        academic_group=user.academic_group,
-        student_email=user.student_email
-    )
 
 
 def create_access_token(data: dict):
@@ -53,7 +32,10 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 
-async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> User:
+async def get_current_user(
+        jwt_token: Annotated[str | None, Cookie()],
+        db: Annotated[Session, Depends(get_db)]
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -65,16 +47,15 @@ async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> User:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    user = await User.get_or_none(login=login)
+    user = crud.get_user(login=login, db=db, full=True)
     if user is None:
         raise credentials_exception
-    await user.fetch_related("team", "roles")
     return user
 
 
-@app.post("/login", response_model=UserUpdate)
-async def login_for_access_token(user: UserAuth, response: Response):
-    user = await authenticate_user(user.login, user.password)
+@app.post("/login", response_model=UserShow)
+async def login_for_access_token(user: UserAuth, response: Response, db: Annotated[Session, Depends(get_db)]):
+    user = await authenticate_user(user.login, user.password, db)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -83,68 +64,83 @@ async def login_for_access_token(user: UserAuth, response: Response):
         )
     access_token = create_access_token(data={"sub": user.login})
     response.set_cookie(key="jwt_token", value=access_token)
-    return UserUpdate(login=user.login, id=user.id)
+    return UserShow(login=user.login, id=user.id)
 
 
-@app.post('/register', response_model=UserUpdate)
-async def create_user(user: UserAuth):
+@app.post('/register', response_model=UserShow)
+async def create_user(user: UserAuth, db: Annotated[Session, Depends(get_db)]):
     hashed_password = pwd_context.hash(user.password)
     new_user = User(login=user.login, hashed_password=hashed_password)
     try:
-        await new_user.save()
-        return UserUpdate(login=new_user.login, id=new_user.id)
-    except IntegrityError:
+        crud.add_user(new_user, db)
+        return UserShow(login=new_user.login, id=new_user.id)
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User already exists"
+            detail="User with such login already exists"
         )
 
 
-@app.get('/user_profile', response_model=UserUpdate)
+@app.get('/user_profile', response_model=UserShow)
 async def get_user(user: Annotated[User, Depends(get_current_user)]):
-    return user_schema_from_tortoise(user)
+    return user_schema_from_orm(user)
 
 
-@app.get('/user_groups', response_model=list[GroupSchema])
-async def get_user_groups(user: Annotated[User, Depends(get_current_user)]):
-    db_user = await User.get(id=user.id)
-    await db_user.fetch_related('groups')
-    groups = []
-    for group in db_user.groups:
-        await group.fetch_related('members')
-        new_group = dict()
-        new_group['name'] = group.name
-        new_group['members'] = []
-        for member in group.members:
-            new_group['members'].append(member.name)
-        groups.append(new_group)
-    return groups
+@app.post('/user_profile', response_model=UserShow)
+async def update_user(user: Annotated[User, Depends(get_current_user)],
+                      upd_data: UserUpdate,
+                      db: Annotated[Session, Depends(get_db)]):
+    try:
+        new_user = crud.update_user(user, db, upd_data)
+        return user_schema_from_orm(new_user)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User with such login already exists"
+        )
 
 
 @app.post('/create_team')
-async def create_team(user: Annotated[User, Depends(get_current_user)], team: CreateTeam):
+async def create_team(user: Annotated[User, Depends(get_current_user)],
+                      team: CreateTeam,
+                      db: Annotated[Session, Depends(get_db)]):
     if user.team is not None:
-        pass
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="User already has a team")
     else:
         try:
-            new_team = Team(name=team.name, description=team.description, captain_id=user.id)
-            user.team = new_team
-            # await new_team.save()
-            await user.team.save()
-            tortoise.fields.relational._NoneAwaitable
-            user._
-            user = await User.get(id=user.id)
-            print(type(user.team))
-            print(user.team)
-            return {'team': new_team.name}
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Team with such name already exists"
-            )
+            crud.add_team(user, db, team)
+            return {"team": team.name}
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Team with such name already exists")
 
 
-register_tortoise(
-    app=app,
-    config=TORTOISE_ORM
-)
+@app.post('/join_team')
+async def join_team(user: Annotated[User, Depends(get_current_user)],
+                    team: JoinTeam,
+                    db: Annotated[Session, Depends(get_db)]):
+    if user.team is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="User already has a team")
+    else:
+        joined_team = crud.join_team(user, db, team.name)
+        if joined_team is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="There is no team with such name")
+        else:
+            return {"team": joined_team}
+
+
+@app.get('/user_team')
+async def get_user_team(user: Annotated[User, Depends(get_current_user)],
+                        db: Annotated[Session, Depends(get_db)]):
+    if user.team is None:
+        return None
+    else:
+        members = []
+        for member in user.team.members:
+            members.append(member.login)
+        return TeamShow(name=user.team.name,
+                        description=user.team.description,
+                        members=members)

@@ -6,7 +6,7 @@ load_dotenv(find_dotenv())
 
 
 class Settings(BaseSettings):
-    postgres_url: PostgresDsn
+    postgres_url: str
     secret_key: str
     hash_algorithm: str = 'HS256'
 
