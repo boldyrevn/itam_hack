@@ -17,3 +17,13 @@ class UserUpdate(BaseModel):
     cv: str | None = None
     academic_group: str | None = None
     student_email: str | None = None
+
+
+class GroupSchema(BaseModel):
+    name: str
+    members: list[str]
+
+
+class CreateTeam(BaseModel):
+    name: str
+    description: str | None = None

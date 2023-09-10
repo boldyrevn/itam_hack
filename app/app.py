@@ -1,22 +1,16 @@
 from typing import Annotated
 
-from fastapi import (
-    FastAPI,
-    HTTPException,
-    status,
-    Response,
-    Depends,
-    Cookie
-)
+import tortoise
+from fastapi import FastAPI, HTTPException, status, Response, Depends, Cookie
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from tortoise.contrib.fastapi import register_tortoise
 from tortoise.exceptions import IntegrityError
 
-from app.models import User
-from app.schemas import UserAuth, UserUpdate
+from app.tortoise_models import User, Team
+from app.schemas import UserAuth, UserUpdate, GroupSchema, CreateTeam
 from config import settings
-from database import TORTOISE_ORM
+from old_database import TORTOISE_ORM
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -59,7 +53,7 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 
-async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> UserUpdate:
+async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -75,7 +69,7 @@ async def get_current_user(jwt_token: Annotated[str | None, Cookie()]) -> UserUp
     if user is None:
         raise credentials_exception
     await user.fetch_related("team", "roles")
-    return user_schema_from_tortoise(user)
+    return user
 
 
 @app.post("/login", response_model=UserUpdate)
@@ -107,21 +101,47 @@ async def create_user(user: UserAuth):
 
 
 @app.get('/user_profile', response_model=UserUpdate)
-async def get_user(user: Annotated[UserUpdate, Depends(get_current_user)]):
-    return user
+async def get_user(user: Annotated[User, Depends(get_current_user)]):
+    return user_schema_from_tortoise(user)
 
 
-@app.get('/user_groups', response_model=None)
-async def get_user_groups(user: Annotated[UserUpdate, Depends(get_current_user)]):
+@app.get('/user_groups', response_model=list[GroupSchema])
+async def get_user_groups(user: Annotated[User, Depends(get_current_user)]):
     db_user = await User.get(id=user.id)
     await db_user.fetch_related('groups')
     groups = []
     for group in db_user.groups:
         await group.fetch_related('members')
         new_group = dict()
+        new_group['name'] = group.name
         new_group['members'] = []
         for member in group.members:
-            pass
+            new_group['members'].append(member.name)
+        groups.append(new_group)
+    return groups
+
+
+@app.post('/create_team')
+async def create_team(user: Annotated[User, Depends(get_current_user)], team: CreateTeam):
+    if user.team is not None:
+        pass
+    else:
+        try:
+            new_team = Team(name=team.name, description=team.description, captain_id=user.id)
+            user.team = new_team
+            # await new_team.save()
+            await user.team.save()
+            tortoise.fields.relational._NoneAwaitable
+            user._
+            user = await User.get(id=user.id)
+            print(type(user.team))
+            print(user.team)
+            return {'team': new_team.name}
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Team with such name already exists"
+            )
 
 
 register_tortoise(
